@@ -118,11 +118,13 @@ pub struct PutIndexErr {
 }
 
 /// This is the struct you get back if you try to create an index that already existed
+#[allow(dead_code)]
 #[derive(Deserialize, Debug)]
 pub struct PutIndexRespErr {
     status: u16,
     error: PutIndexErr,
 }
+
 
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -164,13 +166,47 @@ pub struct PutDocResp {
 }
 
 
-
 /// use this method to place a document in an index
 pub async fn put_doc<T: Serialize>(index: &str, _id: &str, doc: &T) -> Result<PutDocResp, GenericError> {
     let path = format!("{}/_doc/{}", index, _id);
     let resp: PutDocResp = req_payload(Method::Put, &path, doc).await?;
     Ok(resp)
 }
+
+
+
+/// When you upsert a document, you can provide different behavior depending on whether or not the document already existed
+/// But assuming for the moment you want to replace all fields with new ones if it did,
+/// this struct just passes the document twice 
+/// See https://opensearch.org/docs/latest/opensearch/index-data/#update-data 
+#[derive(Serialize, Debug)]
+pub struct UpsertReq<'doc, T> {
+    pub doc: &'doc T,
+    pub upsert: &'doc T,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct UpsertDocResp {
+    pub _index: String,
+    pub _type: Option<String>,  
+    pub _id: String,
+    pub _version: u16,
+    pub result: String,
+    pub _shards:DocShards,
+    pub _seq_no: u16, 
+    pub _primary_term: u16,
+}
+
+
+/// upsert a docu, updating any fields that did not exist
+/// See https://opensearch.org/docs/latest/opensearch/index-data/#update-data
+pub async fn upsert_doc<'doc, T: Serialize>(index: &str, _id: &str, doc: &'doc T) -> Result<PutDocResp, GenericError> {
+    let path = format!("{}/_update/{}", index, _id);
+    let req = UpsertReq{doc: doc, upsert: doc};
+    let resp: PutDocResp = req_payload(Method::Post, &path, &req).await?;
+    Ok(resp)
+}
+
 
 /// This is the struct that gets sent back when you try to get a document by its id
 #[derive(Deserialize)]
@@ -232,7 +268,7 @@ pub async fn query_payload<TQ: Serialize, T: DeserializeOwned>(index: &str, quer
 mod tests {
     use super::*;
     use serde::Serialize;
-    use serde_json::{json,Value};
+    use serde_json::{json};
     use tokio::runtime::Runtime;
     use chrono::NaiveDate;
     use rand::{distributions::Alphanumeric, Rng};
@@ -286,6 +322,34 @@ mod tests {
             let resp = get_doc(TEST_INDEX, "123").await.unwrap();
             println!("got this doc back: {:?}", &resp._source);
             assert_eq!(dd, resp._source.unwrap()); // ensure you got the same document back
+        });
+    }
+
+    #[test] 
+    fn test_upsert_doc() {
+        // ensure you can upsert a document
+        let today = chrono::Utc::now().naive_local().date();
+        let name1 = "Fiddle Stixx".to_string();
+        let name2 = "Lemongrass".to_string();
+        let position = 72;
+        let mut dd = DemoDoc{name: name1.clone(), position, date: today};
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            // insert the document in its current state
+            let resp = upsert_doc(TEST_INDEX, "123up", &dd).await.unwrap();
+            println!("{:?}", &resp);
+            let resp1: GetDocResp<DemoDoc> = get_doc(TEST_INDEX, "123up").await.unwrap();
+            // update the document
+            dd.name = name2.clone();
+            let resp = upsert_doc(TEST_INDEX, "123up", &dd).await.unwrap();
+            println!("{:?}", &resp);
+            let resp2: GetDocResp<DemoDoc> = get_doc(TEST_INDEX, "123up").await.unwrap();
+            // ensure the version number was incremented
+            assert!(&resp2._version.unwrap() > &resp1._version.unwrap());
+            // ensure you changed what you wanted to change
+            assert_eq!(name1, resp1._source.unwrap().name); 
+            assert_eq!(name2, resp2._source.unwrap().name); 
+            
         });
     }
 
