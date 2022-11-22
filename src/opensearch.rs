@@ -1,8 +1,22 @@
 use std::{env, collections::HashMap, vec::Vec};
+use async_trait::async_trait;
 use reqwest;
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use serde_json;
 use crate::core::{GenericError};
+
+
+/// Just implement this trait on any struct and then you can call .opnsch_upsert() to upsert it!! 
+#[async_trait]
+pub trait Upsertable: Serialize {
+    /// This method defines the Openserch
+    fn opnsch_index(&self) -> &'static str;
+    fn opnsch_id(&self) -> String;
+    async fn opnsch_upsert(&self) -> Result<UpsertDocResp, GenericError> {
+        let resp: UpsertDocResp = upsert_doc(self.opnsch_index(), &self.opnsch_id(), &self).await?;
+        Ok(resp)
+    }
+}
 
 
 // given a path, create the url from environment variables
@@ -200,10 +214,10 @@ pub struct UpsertDocResp {
 
 /// upsert a docu, updating any fields that did not exist
 /// See https://opensearch.org/docs/latest/opensearch/index-data/#update-data
-pub async fn upsert_doc<'doc, T: Serialize>(index: &str, _id: &str, doc: &'doc T) -> Result<PutDocResp, GenericError> {
+pub async fn upsert_doc<'doc, T: Serialize>(index: &str, _id: &str, doc: &'doc T) -> Result<UpsertDocResp, GenericError> {
     let path = format!("{}/_update/{}", index, _id);
     let req = UpsertReq{doc: doc, upsert: doc};
-    let resp: PutDocResp = req_payload(Method::Post, &path, &req).await?;
+    let resp: UpsertDocResp = req_payload(Method::Post, &path, &req).await?;
     Ok(resp)
 }
 
@@ -281,6 +295,15 @@ mod tests {
         pub position: i32,
         pub date: NaiveDate,
     }
+
+    impl Upsertable for DemoDoc {
+        fn opnsch_id(&self) -> String {
+            format!("pos{}", &self.position)
+        }
+        fn opnsch_index(&self) ->  &'static str {
+            TEST_INDEX
+        }
+    }
     
     #[test]
     fn test_ping() {
@@ -321,6 +344,23 @@ mod tests {
             assert!(resp._shards.successful >= 1);
             let resp = get_doc(TEST_INDEX, "123").await.unwrap();
             println!("got this doc back: {:?}", &resp._source);
+            assert_eq!(dd, resp._source.unwrap()); // ensure you got the same document back
+        });
+    }
+
+    #[test] 
+    fn upsert_via_trait() {
+        // ensure you can write things to OpenSearch via the Upsertable trait
+        let today = chrono::Utc::now().naive_local().date();
+        let name: String = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(7).map(char::from).collect();
+        let position = 72; // NOTE this is used for the primary key 
+        let dd = DemoDoc{name, position, date: today};
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let _resp = &dd.opnsch_upsert().await.unwrap();
+            let resp = get_doc(&dd.opnsch_index(), &dd.opnsch_id()).await.unwrap();
             assert_eq!(dd, resp._source.unwrap()); // ensure you got the same document back
         });
     }
