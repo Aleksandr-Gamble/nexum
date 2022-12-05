@@ -8,13 +8,19 @@ use crate::core::{GenericError};
 
 /// Just implement this trait on any struct and then you can call .opnsch_upsert() to upsert it!! 
 #[async_trait]
-pub trait Upsertable: Serialize {
+pub trait Upsertable<Doc: Serialize + Send + Sync> {
     /// This method defines the Openserch
     fn opnsch_index(&self) -> &'static str;
     fn opnsch_id(&self) -> String;
-    async fn opnsch_upsert(&self) -> Result<UpsertDocResp, GenericError> {
-        let resp: UpsertDocResp = upsert_doc(self.opnsch_index(), &self.opnsch_id(), &self).await?;
-        Ok(resp)
+    fn opensearc_doc(&self) -> Option<Doc>; // this functions what document (if any) you want to save in opensearch
+    async fn opnsch_upsert(&self) -> Result<Option<UpsertDocResp>, GenericError> {
+        match self.opensearc_doc() {
+            Some(doc) => {
+                let resp: UpsertDocResp = upsert_doc(self.opnsch_index(), &self.opnsch_id(), &doc).await?;
+                Ok(Some(resp))
+            },
+            None => Ok(None)
+        }        
     }
 }
 
