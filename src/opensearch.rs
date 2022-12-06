@@ -1,3 +1,8 @@
+//! The opensearch module is intended to make it easy to insert/update documents into OpenSearch
+//! with properly sourced environment variables, the UpsertSelf trait can be implemented on a struct
+//! to allow an instance to be upserted by simply calling self.opnsch_upsert()
+//! Alternatively the UpsertDeriv trait allows you to upsert a "derivative" struct
+
 use std::{env, collections::HashMap, vec::Vec};
 use async_trait::async_trait;
 use reqwest;
@@ -5,15 +10,28 @@ use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use serde_json;
 use crate::core::{GenericError};
 
-
 /// Just implement this trait on any struct and then you can call .opnsch_upsert() to upsert it!! 
 #[async_trait]
-pub trait Upsertable<Doc: Serialize + Send + Sync> {
+pub trait UpsertSelf: Serialize + DeserializeOwned {
+    fn opnsch_index(&self) -> &'static str;
+    fn opnsch_id(&self) -> String;
+    async fn opnsch_upsert(&self) -> Result<UpsertDocResp, GenericError> {
+        let resp: UpsertDocResp = upsert_doc(self.opnsch_index(), &self.opnsch_id(), &self).await?;
+        Ok(resp)
+    }
+}
+
+
+
+/// The UpsertDeriv trait is similar to the UpsertSelf trait,
+/// With the key difference being that you have the **option** of inserting a derivative struct (doc)
+#[async_trait]
+pub trait UpsertDeriv<Doc: Serialize + DeserializeOwned + Send + Sync> {
     /// This method defines the Openserch
     fn opnsch_index(&self) -> &'static str;
     fn opnsch_id(&self) -> String;
     fn opensearc_doc(&self) -> Option<Doc>; // this functions what document (if any) you want to save in opensearch
-    async fn opnsch_upsert(&self) -> Result<Option<UpsertDocResp>, GenericError> {
+    async fn opnsch_upsert_deriv(&self) -> Result<Option<UpsertDocResp>, GenericError> {
         match self.opensearc_doc() {
             Some(doc) => {
                 let resp: UpsertDocResp = upsert_doc(self.opnsch_index(), &self.opnsch_id(), &doc).await?;
@@ -302,7 +320,7 @@ mod tests {
         pub date: NaiveDate,
     }
 
-    impl Upsertable for DemoDoc {
+    impl UpsertSelf for DemoDoc {
         fn opnsch_id(&self) -> String {
             format!("pos{}", &self.position)
         }
@@ -311,6 +329,31 @@ mod tests {
         }
     }
     
+    pub struct ParentDoc {
+        id: i32
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct ChildDoc {
+        parent_id: i32,
+        child_id: i32
+    }
+
+    impl UpsertDeriv<ChildDoc> for ParentDoc {
+        fn opnsch_index(&self) ->  &'static str {
+            "test_deriv"
+        }
+        fn opnsch_id(&self) -> String {
+            format!("{}", self.id)
+        }
+        fn opensearc_doc(&self) -> Option<ChildDoc> {
+            let child_id = self.id + 1;
+            let cdoc = ChildDoc{parent_id: self.id, child_id};
+            Some(cdoc)
+        }
+    }
+
+
     #[test]
     fn test_ping() {
         // ensure you can ping the cluster
@@ -326,7 +369,6 @@ mod tests {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let resp = put_index(TEST_INDEX, &["some_field"]).await.unwrap();
-            //println!("{:?}", &resp);
             match resp {
                 PutIndexResp::Error(e) => println!("{:?}", &e),
                 PutIndexResp::Succ(s) => println!("{:?}", &s),
@@ -355,8 +397,8 @@ mod tests {
     }
 
     #[test] 
-    fn upsert_via_trait() {
-        // ensure you can write things to OpenSearch via the Upsertable trait
+    fn upsert_via_upsertself_trait() {
+        // ensure you can write things to OpenSearch via the UpsertSelf trait
         let today = chrono::Utc::now().naive_local().date();
         let name: String = rand::thread_rng()
             .sample_iter(&Alphanumeric)
@@ -368,6 +410,18 @@ mod tests {
             let _resp = &dd.opnsch_upsert().await.unwrap();
             let resp = get_doc(&dd.opnsch_index(), &dd.opnsch_id()).await.unwrap();
             assert_eq!(dd, resp._source.unwrap()); // ensure you got the same document back
+        });
+    }
+
+    #[test] 
+    fn upsert_via_upsertderiv_trait() {
+        // ensure you can write things to OpenSearch via the UpsertSelf trait
+        let pdoc = ParentDoc{id: 27};
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let _resp = &pdoc.opnsch_upsert_deriv().await.unwrap().unwrap();
+            let resp: GetDocResp<ChildDoc> = get_doc(&pdoc.opnsch_index(), &pdoc.opnsch_id()).await.unwrap();
+            assert_eq!(27, resp._source.unwrap().parent_id); // ensure you got the same document back
         });
     }
 
