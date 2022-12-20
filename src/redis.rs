@@ -90,11 +90,19 @@ pub mod rediserde {
     /// For a struct that can be deserialized,
     /// This helpful method gets a connection, gets the value stored at the key,
     /// deserializes it, and returns the desired struct
-    pub async fn get<T: DeserializeOwned>(pool: &RedisPool, key: &str) -> Result<T, GenericError> {
+    pub async fn get<T: DeserializeOwned>(pool: &RedisPool, key: &str) -> Result<Option<T>, GenericError> {
         let mut rconn = pool.get().await?;
-        let jz: String = rconn.get(key).await?;
+        let jz: String = match rconn.spop(key).await {
+            Ok(val) => val,
+            Err(e) => {
+                if e.to_string().contains("response was nil") {
+                    return Ok(None)
+                }
+                return Err(e.into())
+            }  
+        };
         let t: T = serde_json::from_str(&jz)?;
-        Ok(t)
+        Ok(Some(t))
     }
 
     /// For a struct that can be serialized,
@@ -115,11 +123,41 @@ pub mod rediserde {
         Ok(())
     }
 
-    pub async fn spop<T: DeserializeOwned>(pool: &RedisPool, key: &str) -> Result<T, GenericError> {
+    /// add a string to a set
+    pub async fn sadd_str(pool: &RedisPool, key: &str, val: &str) -> Result<(), GenericError> {
         let mut rconn = pool.get().await?;
-        let jz: String = rconn.spop(key).await?;
+        let _ : () = rconn.sadd(key, val).await?;
+        Ok(())
+    }
+
+    pub async fn spop_str(pool: &RedisPool, key: &str) -> Result<Option<String>, GenericError> {
+        let mut rconn = pool.get().await?;
+        let jz: String = match rconn.spop(key).await {
+            Ok(val) => val,
+            Err(e) => {
+                if e.to_string().contains("response was nil") {
+                    return Ok(None)
+                }
+                return Err(e.into())
+            }  
+        };
+        Ok(Some(jz))
+    }
+
+
+    pub async fn spop<T: DeserializeOwned>(pool: &RedisPool, key: &str) -> Result<Option<T>, GenericError> {
+        let jz = match spop_str(pool, key).await? {
+            Some(val) => val,
+            None => return Ok(None),
+        };
         let t: T = serde_json::from_str(&jz)?;
-        Ok(t)
+        Ok(Some(t))
+    }
+
+    pub async fn scard(pool: &RedisPool, key: &str) -> Result<usize, GenericError> {
+        let mut rconn = pool.get().await?;
+        let cardinality = rconn.scard(key).await?;
+        Ok(cardinality)
     }
 
 }
@@ -168,7 +206,7 @@ mod tests {
             let mut rconn = rpool.get().await.unwrap();
             let rand_int = gen_rand_int();
             let _ : () = rconn.set(OBSCURE_TEST_KEY_1, rand_int).await.unwrap();
-            let x: i32 = rconn.get(OBSCURE_TEST_KEY_1).await.unwrap();
+            let x: i32 = rconn.get(OBSCURE_TEST_KEY_1).await.unwrap().unwrap();
             assert_eq!(x, rand_int);
             println!("redis::get_set_int passed: {} == {}", &x, &rand_int);
 
@@ -185,7 +223,7 @@ mod tests {
             let name: String = rand::thread_rng().sample_iter(&Alphanumeric).take(7).map(char::from).collect();
             let ds = DemoStruct{id, name};
             let _x = rediserde::set(&rpool, OBSCURE_TEST_KEY_2, &ds).await.unwrap();
-            let ds2: DemoStruct = rediserde::get(&rpool, OBSCURE_TEST_KEY_2).await.unwrap();
+            let ds2: DemoStruct = rediserde::get(&rpool, OBSCURE_TEST_KEY_2).await.unwrap().unwrap();
             assert_eq!(&ds.id, &ds2.id);
             assert_eq!(&ds.name, &ds2.name);
 
