@@ -4,6 +4,7 @@ pub mod opensearch;
 pub mod postgres;
 pub mod redis;
 pub mod sqs;
+pub mod clean_text;
 pub mod utils;
 
 #[cfg(test)]
