@@ -228,10 +228,10 @@ pub struct UpsertDocResp {
     pub _index: String,
     pub _type: Option<String>,  
     pub _id: String,
-    pub _version: u16,
+    pub _version: u32,
     pub result: String,
     pub _shards:DocShards,
-    pub _seq_no: u16, 
+    pub _seq_no: u64, 
     pub _primary_term: u16,
 }
 
