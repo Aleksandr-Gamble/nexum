@@ -20,7 +20,7 @@ const CACHE_POOL_MAX_OPEN: u64 = 16;
 const CACHE_POOL_MAX_IDLE: u64 = 8;
 const CACHE_POOL_TIMEOUT_SECONDS: u64 = 1;
 const CACHE_POOL_EXPIRE_SECONDS: u64 = 60;
-const OBSCURE_TEST_KEY: &'static str = "obscure_test_key";
+const OBSCURE_TEST_KEY: &'static str = "_OBSCURE_TEST_KEY_0";
 
 pub type RedisConn = Connection<RedisConnectionManager>;
 pub type RedisPool = Pool<RedisConnectionManager>;
@@ -87,12 +87,19 @@ pub mod rediserde {
     use serde_json;
 
 
+    /// Delete a key 
+    pub async fn del(pool: &RedisPool, key: &str) -> Result<(), GenericError> {
+        let mut rconn = pool.get().await?;
+        let _ : () = rconn.del(key).await?;
+        Ok(())
+    }
+
     /// For a struct that can be deserialized,
     /// This helpful method gets a connection, gets the value stored at the key,
     /// deserializes it, and returns the desired struct
     pub async fn get<T: DeserializeOwned>(pool: &RedisPool, key: &str) -> Result<Option<T>, GenericError> {
         let mut rconn = pool.get().await?;
-        let jz: String = match rconn.spop(key).await {
+        let jz: String = match rconn.get(key).await {
             Ok(val) => val,
             Err(e) => {
                 if e.to_string().contains("response was nil") {
@@ -206,9 +213,9 @@ mod tests {
             let mut rconn = rpool.get().await.unwrap();
             let rand_int = gen_rand_int();
             let _ : () = rconn.set(OBSCURE_TEST_KEY_1, rand_int).await.unwrap();
-            let x: i32 = rconn.get(OBSCURE_TEST_KEY_1).await.unwrap().unwrap();
-            assert_eq!(x, rand_int);
-            println!("redis::get_set_int passed: {} == {}", &x, &rand_int);
+            let ox: Option<i32> = rconn.get(OBSCURE_TEST_KEY_1).await.unwrap();
+            assert_eq!(ox.unwrap(), rand_int);
+            println!("redis::get_set_int passed: {} == {}", ox.unwrap(), rand_int);
 
         })
     }
@@ -219,14 +226,19 @@ mod tests {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let rpool = new_pool_from_env().await.unwrap();
+            // ensure you get delete a key and then get the None variant back 
+            let _x = rediserde::del(&rpool, OBSCURE_TEST_KEY_2).await.unwrap();
+            let ods2: Option<DemoStruct> = rediserde::get(&rpool, OBSCURE_TEST_KEY_2).await.unwrap();
+            assert!(ods2.is_none());
+            // Then set it and ensure you can get the Some() variant back
             let id = gen_rand_int();
             let name: String = rand::thread_rng().sample_iter(&Alphanumeric).take(7).map(char::from).collect();
             let ds = DemoStruct{id, name};
             let _x = rediserde::set(&rpool, OBSCURE_TEST_KEY_2, &ds).await.unwrap();
-            let ds2: DemoStruct = rediserde::get(&rpool, OBSCURE_TEST_KEY_2).await.unwrap().unwrap();
+            let ods2: Option<DemoStruct> = rediserde::get(&rpool, OBSCURE_TEST_KEY_2).await.unwrap();
+            let ds2 = ods2.unwrap();
             assert_eq!(&ds.id, &ds2.id);
             assert_eq!(&ds.name, &ds2.name);
-
         })
     }
 }
