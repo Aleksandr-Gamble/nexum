@@ -18,7 +18,7 @@ use crate::core::GenericError;
 // see https://blog.logrocket.com/using-redis-in-a-rust-web-service/
 const CACHE_POOL_MAX_OPEN: u64 = 16;
 const CACHE_POOL_MAX_IDLE: u64 = 8;
-const CACHE_POOL_TIMEOUT_SECONDS: u64 = 1;
+const CACHE_POOL_TIMEOUT_SECONDS: u64 = 20;
 const CACHE_POOL_EXPIRE_SECONDS: u64 = 60;
 const OBSCURE_TEST_KEY: &'static str = "_OBSCURE_TEST_KEY_0";
 
@@ -30,10 +30,11 @@ pub type RedisPool = Pool<RedisConnectionManager>;
 pub async fn new_pool_from_client(client: Client) -> Result<RedisPool, GenericError> {
     let manager = RedisConnectionManager::new(client);
     let pool = Pool::builder()
-        .get_timeout(Some(Duration::from_secs(CACHE_POOL_TIMEOUT_SECONDS)))
+        //.get_timeout(Some(Duration::from_secs(CACHE_POOL_TIMEOUT_SECONDS)))
         .max_open(CACHE_POOL_MAX_OPEN)
-        .max_idle(CACHE_POOL_MAX_IDLE)
-        .max_lifetime(Some(Duration::from_secs(CACHE_POOL_EXPIRE_SECONDS)))
+        //.max_idle(CACHE_POOL_MAX_IDLE)
+        //.max_lifetime(Some(Duration::from_secs(CACHE_POOL_EXPIRE_SECONDS)))
+        //.max_lifetime(None)
         .build(manager);
     // try to connect now so you fail early
     let mut conn = pool.get().await?;
@@ -138,6 +139,7 @@ pub mod rediserde {
     }
 
     pub async fn spop_str(pool: &RedisPool, key: &str) -> Result<Option<String>, GenericError> {
+        // This pool.get() hangs sometimes with the error "Timed out in mobc". What to do?  
         let mut rconn = pool.get().await?;
         let jz: String = match rconn.spop(key).await {
             Ok(val) => val,
